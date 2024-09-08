@@ -1,142 +1,126 @@
-package debug;
+package openfl.display;
 
-import flixel.FlxG;
+import flixel.math.FlxMath;
+import haxe.Timer;
+import openfl.events.Event;
 import openfl.text.TextField;
 import openfl.text.TextFormat;
-import openfl.system.System as OpenFlSystem;
-import lime.system.System as LimeSystem;
+#if gl_stats
+import openfl.display._internal.stats.Context3DStats;
+import openfl.display._internal.stats.DrawCallContext;
+#end
+#if flash
+import openfl.Lib;
+#end
+
+#if openfl
+import openfl.system.System;
+#end
 
 /**
 	The FPS class provides an easy-to-use monitor to display
 	the current frame rate of an OpenFL project
 **/
-#if cpp
-#if windows
-@:cppFileCode('#include <windows.h>')
-#elseif (ios || mac)
-@:cppFileCode('#include <mach-o/arch.h>')
-#else
-@:headerInclude('sys/utsname.h')
+#if !openfl_debug
+@:fileXml('tags="haxe,release"')
+@:noDebug
 #end
-#end
-class FPSCounter extends TextField
+class FPS extends TextField
 {
 	/**
 		The current frame rate, expressed using frames-per-second
 	**/
 	public var currentFPS(default, null):Int;
 
-	/**
-		The current memory usage (WARNING: this is NOT your total program memory usage, rather it shows the garbage collector memory)
-	**/
-	public var memoryMegas(get, never):Float;
-
+	@:noCompletion private var cacheCount:Int;
+	@:noCompletion private var currentTime:Float;
 	@:noCompletion private var times:Array<Float>;
-
-	public var os:String = '';
 
 	public function new(x:Float = 10, y:Float = 10, color:Int = 0x000000)
 	{
 		super();
 
-		if (LimeSystem.platformName == LimeSystem.platformVersion || LimeSystem.platformVersion == null)
-			os = '\nOS: ${LimeSystem.platformName}' #if cpp + ' ${getArch() != 'Unknown' ? getArch() : ''}' #end;
-		else
-			os = '\nOS: ${LimeSystem.platformName}' #if cpp + ' ${getArch() != 'Unknown' ? getArch() : ''}' #end + ' - ${LimeSystem.platformVersion}';
-
-		positionFPS(x, y);
+		this.x = x;
+		this.y = y;
 
 		currentFPS = 0;
 		selectable = false;
 		mouseEnabled = false;
-		defaultTextFormat = new TextFormat("_sans", 14, color);
-		width = FlxG.width;
+		defaultTextFormat = new TextFormat(Assets.getFont(Paths.font("mariones.ttf")).fontName, 10, color);
+		autoSize = LEFT;
 		multiline = true;
 		text = "FPS: ";
 
+		cacheCount = 0;
+		currentTime = 0;
 		times = [];
-	}
 
-	var deltaTimeout:Float = 0.0;
+		#if flash
+		addEventListener(Event.ENTER_FRAME, function(e)
+		{
+			var time = Lib.getTimer();
+			__enterFrame(time - currentTime);
+		});
+		#end
+	}
 
 	// Event Handlers
-	private override function __enterFrame(deltaTime:Float):Void
-	{
-		// prevents the overlay from updating every frame, why would you need to anyways
-		if (deltaTimeout > 1000) {
-			deltaTimeout = 0.0;
-			return;
-		}
-
-		final now:Float = haxe.Timer.stamp() * 1000;
-		times.push(now);
-		while (times[0] < now - 1000) times.shift();
-
-		currentFPS = times.length < FlxG.updateFramerate ? times.length : FlxG.updateFramerate;		
-		updateText();
-		deltaTimeout += deltaTime;
-	}
-
-	public dynamic function updateText():Void // so people can override it in hscript
-	{
-		text = 
-		'FPS: $currentFPS' + 
-		'\nMemory: ${flixel.util.FlxStringUtil.formatBytes(memoryMegas)}' +
-		os;
-
-		textColor = 0xFFFFFFFF;
-		if (currentFPS < FlxG.drawFramerate * 0.5)
-			textColor = 0xFFFF0000;
-	}
-
-	inline function get_memoryMegas():Float
-		return cpp.vm.Gc.memInfo64(cpp.vm.Gc.MEM_INFO_USAGE);
-
-	public inline function positionFPS(X:Float, Y:Float, ?scale:Float = 1){
-		scaleX = scaleY = #if android (scale > 1 ? scale : 1) #else (scale < 1 ? scale : 1) #end;
-		x = FlxG.game.x + X;
-		y = FlxG.game.y + Y;
-	}
-
-	#if cpp
-	#if windows
-	@:functionCode('
-		SYSTEM_INFO osInfo;
-
-		GetSystemInfo(&osInfo);
-
-		switch(osInfo.wProcessorArchitecture)
-		{
-			case 9:
-				return ::String("x86_64");
-			case 5:
-				return ::String("ARM");
-			case 12:
-				return ::String("ARM64");
-			case 6:
-				return ::String("IA-64");
-			case 0:
-				return ::String("x86");
-			default:
-				return ::String("Unknown");
-		}
-	')
-	#elseif (ios || mac)
-	@:functionCode('
-		const NXArchInfo *archInfo = NXGetLocalArchInfo();
-    	return ::String(archInfo == NULL ? "Unknown" : archInfo->name);
-	')
-	#else
-	@:functionCode('
-		struct utsname osInfo{};
-		uname(&osInfo);
-		return ::String(osInfo.machine);
-	')
-	#end
+	@:noCompletion var _text:String = '';
 	@:noCompletion
-	private function getArch():String
+	private #if !flash override #end function __enterFrame(deltaTime:Float):Void
 	{
-		return "Unknown";
+		currentTime += deltaTime;
+		times.push(currentTime);
+
+		while (times[0] < currentTime - 1000)
+		{
+			times.shift();
+		}
+
+		var currentCount = times.length;
+		currentFPS = Math.round((currentCount + cacheCount) / 2);
+		if (currentFPS > ClientPrefs.framerate) currentFPS = ClientPrefs.framerate;
+
+		if (currentCount != cacheCount /*&& visible*/){
+			_text = "FPS: " + currentFPS;
+			var memoryMegas:Float = 0;
+			
+			#if openfl
+			memoryMegas = System.totalMemory;
+			_text += "\nMemory: " + formatBytes(memoryMegas);
+			#end
+
+			textColor = 0xFFa11b1b;
+			if (currentFPS <= ClientPrefs.framerate / 2 || PlayState.virtualmode == true)
+			{
+				textColor = 0xFFe30000;
+			}
+
+			#if (gl_stats && !disable_cffi && (!html5 || !canvas))
+			_text += "\ntotalDC: " + Context3DStats.totalDrawCalls();
+			_text += "\nstageDC: " + Context3DStats.contextDrawCalls(DrawCallContext.STAGE);
+			_text += "\nstage3DDC: " + Context3DStats.contextDrawCalls(DrawCallContext.STAGE3D);
+			#end
+
+			_text += "\n";
+
+			text = _text; // doesn't spam multiple set_text in a frame
+		}
+
+		cacheCount = currentCount;
 	}
-	#end
+
+	/**
+	 * Takes an amount of bytes and finds the fitting unit. Makes sure that the
+	 * value is below 1024. Example: formatBytes(123456789); -> 117.74MB
+	 */
+	static var units:Array<String> = [" Bytes", " kB", " MB", " GB", " TB", " PB"];
+	inline public static function formatBytes(Bytes:Float, Precision:Int = 2):String{
+		var curUnit = 0;
+		while (Bytes >= 1024 && curUnit < units.length - 1){
+			Bytes /= 1024;
+			curUnit++;
+		}
+		return FlxMath.roundDecimal(Bytes, Precision) + units[curUnit];
+	}
 }
